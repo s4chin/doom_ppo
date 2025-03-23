@@ -1,8 +1,12 @@
 from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
+from stable_baselines3.common.policies import ActorCriticPolicy
 
 from gymnasium import spaces
 import torch
 import torch.nn as nn
+
+from envs import possible_actions
+
 
 class CustomCNN(BaseFeaturesExtractor):
     def __init__(self, observation_space: spaces.Box, features_dim: int = 512, **kwargs):
@@ -10,6 +14,7 @@ class CustomCNN(BaseFeaturesExtractor):
         
         # Check if observation space is Dict (contains both screen and automap)
         if isinstance(observation_space, spaces.Dict):
+            print(f"{observation_space.keys()}")
             # Get dimensions from screen and automap spaces
             screen_channels = observation_space['screen'].shape[0]
             automap_channels = observation_space['automap'].shape[0]
@@ -52,14 +57,26 @@ class CustomCNN(BaseFeaturesExtractor):
                 
                 nn.Flatten(),
             )
+
+            self.action_history_embedding = nn.Embedding(32, 8)
+            self.action_history_net = nn.Sequential(
+                nn.Flatten(),
+                nn.Linear(32 * 8, 128),
+                nn.LayerNorm(128),
+                nn.LeakyReLU(**kwargs),
+                nn.Linear(128, 32),
+                nn.LayerNorm(32),
+                nn.LeakyReLU(**kwargs),
+            )
             
             # Calculate output sizes for both CNNs
             screen_output_size = 9216  # 64 * 9 * 16
             automap_output_size = 4608  # 32 * 9 * 16
+            action_history_output_size = 32
             
             # Create a combined linear layer
             self.linear = nn.Sequential(
-                nn.Linear(screen_output_size + automap_output_size, features_dim, bias=False),
+                nn.Linear(screen_output_size + automap_output_size + action_history_output_size, features_dim, bias=False),
                 nn.LayerNorm(features_dim),
                 nn.LeakyReLU(**kwargs),
             )
@@ -72,22 +89,24 @@ class CustomCNN(BaseFeaturesExtractor):
             # Process screen and automap separately
             screen_features = self.screen_cnn(observations['screen'])
             automap_features = self.automap_cnn(observations['automap'])
+            action_history_features = self.action_history_embedding(observations['action_history'].long())
+            action_history_features = self.action_history_net(action_history_features)
+
+            # print(f"{screen_features.shape=}, {automap_features.shape=}, {action_history_features.shape=}")
             
             # Concatenate features and pass through linear layer
-            combined_features = torch.cat([screen_features, automap_features], dim=1)
+            combined_features = torch.cat([screen_features, automap_features, action_history_features], dim=1)
             return self.linear(combined_features)
         else:
             print('Not using automap')
             return self.linear(self.cnn(observations))
 
 
-# Unused for now
+# Unused for now, making sure screen and automap are processed correctly
 def save_as_image(observations: torch.Tensor):
     # Convert automap to PIL image and save it
     from PIL import Image
     import numpy as np
-    # print(observations['automap'].numpy()[0][:3, :, :])
-    # exit()
     automap_image = Image.fromarray((observations['automap'].numpy()[0][:3, :, :].transpose(1, 2, 0) * 255.).astype(np.uint8))
     automap_image.save('automap.png')
 

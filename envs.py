@@ -78,7 +78,6 @@ AMMO_VARIABLES = [GameVariable.AMMO0, GameVariable.AMMO1, GameVariable.AMMO2, Ga
 # Buttons that cannot be used together
 MUTUALLY_EXCLUSIVE_GROUPS = [
     [Button.MOVE_RIGHT, Button.MOVE_LEFT, Button.TURN_RIGHT, Button.TURN_LEFT],
-    # [Button.TURN_RIGHT, Button.TURN_LEFT],
     [Button.MOVE_FORWARD, Button.MOVE_BACKWARD],
 ]
 
@@ -127,12 +126,13 @@ possible_actions = get_available_actions(np.array([
 class DoomEnvSP(gym.Env):
     """Wrapper environment following Gymnasium interface for a VizDoom game instance."""
     
-    def __init__(self, game: vizdoom.DoomGame, frame_processor: t.Callable, frame_skip: int = 4, n_frames: int = 4, automap_processor: t.Optional[t.Callable] = None):
+    def __init__(self, game: vizdoom.DoomGame, frame_processor: t.Callable, frame_skip: int = 4, n_frames: int = 4, automap_processor: t.Optional[t.Callable] = None, n_actions_history: int = 32):
         """Initialize the Doom environment with a game instance, frame processor, and frame skip."""
         super().__init__()
         
         self.n_frames = n_frames
         self.automap_processor = automap_processor
+        self.n_actions_history = n_actions_history
         
         self.action_space = spaces.Discrete(game.get_available_buttons_size())
         
@@ -149,6 +149,9 @@ class DoomEnvSP(gym.Env):
         
         # Initialize observation shape
         self.single_frame_shape = processed_shape
+        
+        # Initialize action history with zeros
+        self.action_history = np.zeros((self.n_actions_history,), dtype=np.int64)
         
         if game.is_automap_buffer_enabled() and automap_processor is not None:
             automap_h, automap_w, automap_c = game.get_screen_height(), game.get_screen_width(), 3  # Automap is RGB
@@ -169,6 +172,11 @@ class DoomEnvSP(gym.Env):
                     low=0, high=255,
                     shape=(automap_shape[0], automap_shape[1], stacked_automap_channels),
                     dtype=np.uint8
+                ),
+                'action_history': spaces.Box(
+                    low=0, high=len(self.possible_actions)-1,
+                    shape=(self.n_actions_history,),
+                    dtype=np.int64
                 )
             })
             
@@ -190,15 +198,15 @@ class DoomEnvSP(gym.Env):
         
         self.state = self._get_stacked_frames()
 
-        self.prev_health = 100
-        self.prev_armor = 0
-        self.prev_ammo = 0
-        self.prev_hitcount = 0
-        self.prev_killcount = 0
-        self.prev_itemcount = 0
-        self.prev_secretcount = 0
+        self.prev_health = self.game.get_game_variable(GameVariable.HEALTH)
+        self.prev_armor = self.game.get_game_variable(GameVariable.ARMOR)
+        self.prev_ammo = sum(self.game.get_game_variable(variable) for variable in AMMO_VARIABLES)
+        self.prev_hitcount = self.game.get_game_variable(GameVariable.HITCOUNT)
+        self.prev_killcount = self.game.get_game_variable(GameVariable.KILLCOUNT)
+        self.prev_itemcount = self.game.get_game_variable(GameVariable.ITEMCOUNT)
+        self.prev_secretcount = self.game.get_game_variable(GameVariable.SECRETCOUNT)
         self.visited_cells = set()
-        self.start_x, self.start_y = None, None
+        self.start_x, self.start_y = self.game.get_game_variable(GameVariable.POSITION_X), self.game.get_game_variable(GameVariable.POSITION_Y)
         self.grid_size = 50  # Grid size for exploration; adjust based on map scale
 
     def step(self, action: int) -> t.Tuple[Frame, float, bool, bool, dict]:
@@ -206,6 +214,10 @@ class DoomEnvSP(gym.Env):
         reward = self.game.make_action(self.possible_actions[action], self.frame_skip)
         terminated = self.game.is_episode_finished()
         truncated = False  # VizDoom handles termination; no truncation needed here
+        
+        # Update action history
+        self.action_history = np.roll(self.action_history, shift=-1)
+        self.action_history[-1] = action
         
         if self.automap_processor is not None and self.game.is_automap_buffer_enabled():
             new_screen, new_automap = self._get_frame(terminated)
@@ -285,8 +297,7 @@ class DoomEnvSP(gym.Env):
             ammo_delta = curr_ammo - self.prev_ammo
             reward += 10 * max(0, ammo_delta) + min(0, ammo_delta)
 
-            # 11. Penalty for each step
-            reward -= 10
+            # 11. Staying still penalty: Not yet added
 
             self.prev_health = curr_health
             self.prev_armor = curr_armor
@@ -302,6 +313,9 @@ class DoomEnvSP(gym.Env):
         """Reset the environment to start a new episode."""
         super().reset(seed=seed)
         self.game.new_episode()
+        
+        # Reset action history
+        self.action_history = np.zeros((self.n_actions_history,), dtype=np.int64)
         
         if self.automap_processor is not None and self.game.is_automap_buffer_enabled():
             initial_screen, initial_automap = self._get_frame()
@@ -364,7 +378,8 @@ class DoomEnvSP(gym.Env):
         if self.automap_processor is not None and self.game.is_automap_buffer_enabled():
             return {
                 'screen': np.concatenate(self.screen_stack, axis=2),
-                'automap': np.concatenate(self.automap_stack, axis=2)
+                'automap': np.concatenate(self.automap_stack, axis=2),
+                'action_history': self.action_history
             }
         else:
             raise ValueError('Automap is not enabled')
