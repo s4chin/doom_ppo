@@ -258,6 +258,7 @@ class DoomEnvSP(gym.Env):
             self.prev_health = curr_health
             self.prev_armor = curr_armor
             self.prev_ammo = curr_ammo
+            self.prev_hitcount = curr_hitcount
             self.prev_killcount = curr_killcount
             self.prev_itemcount = curr_itemcount
             self.prev_secretcount = curr_secretcount
@@ -279,6 +280,7 @@ class DoomEnvSP(gym.Env):
             self.prev_health = self.game.get_game_variable(GameVariable.HEALTH)
             self.prev_armor = self.game.get_game_variable(GameVariable.ARMOR)
             self.prev_ammo = sum(self.game.get_game_variable(variable) for variable in AMMO_VARIABLES)
+            self.prev_hitcount = self.game.get_game_variable(GameVariable.HITCOUNT)
             self.prev_killcount = self.game.get_game_variable(GameVariable.KILLCOUNT)
             self.prev_itemcount = self.game.get_game_variable(GameVariable.ITEMCOUNT)
             self.prev_secretcount = self.game.get_game_variable(GameVariable.SECRETCOUNT)

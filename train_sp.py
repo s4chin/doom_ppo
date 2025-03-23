@@ -27,7 +27,7 @@ def create_env(config_path="config/test.cfg", map_name=None, render=False, n_fra
     if not render:
         game.set_window_visible(False)
     else:
-        game.set_window_visible(True)
+        game.set_window_visible(False)
         
     game.init()
     return DoomEnvSP(game, n_frames=n_frames, **kwargs)
