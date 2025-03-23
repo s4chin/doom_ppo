@@ -3,7 +3,7 @@ import numpy as np
 import vizdoom
 
 from stable_baselines3 import PPO
-from stable_baselines3.common.callbacks import EvalCallback
+from stable_baselines3.common.callbacks import EvalCallback, CheckpointCallback
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env import DummyVecEnv
 
@@ -31,7 +31,7 @@ def create_env(config_path="config/test.cfg", map_name=None, render=False, n_fra
     if not render:
         game.set_window_visible(False)
     else:
-        game.set_window_visible(True)
+        game.set_window_visible(False)
     
     # Enable automap
     game.set_automap_buffer_enabled(True)
@@ -129,7 +129,15 @@ def solve_env(env_args, n_envs, agent_args, maps=None):
     
     reward_callback = RewardAverageCallback()
     
-    callbacks = [evaluation_callback, reward_callback]
+    checkpoint_callback = CheckpointCallback(
+        save_freq=50000,
+        save_path="logs/models/checkpoints/",
+        name_prefix="ppo_doom_model",
+        save_replay_buffer=False,
+        save_vecnormalize=False,
+    )
+    
+    callbacks = [evaluation_callback, reward_callback, checkpoint_callback]
     
     agent.learn(
         total_timesteps=1000000,
@@ -155,7 +163,7 @@ if __name__ == "__main__":
     # doom_maps = [f"E1M{i}" for i in range(1, 10)]  # E1M1 through E1M9
     doom_maps = ["E1M1"] # for testing
     
-    n_envs = 1
+    n_envs = 8
     agent_args = {}
     
     # Add policy_kwargs to specify our CustomCNN as the features extractor
