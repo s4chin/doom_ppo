@@ -77,10 +77,9 @@ AMMO_VARIABLES = [GameVariable.AMMO0, GameVariable.AMMO1, GameVariable.AMMO2, Ga
 
 # Buttons that cannot be used together
 MUTUALLY_EXCLUSIVE_GROUPS = [
-    [Button.MOVE_RIGHT, Button.MOVE_LEFT],
-    [Button.TURN_RIGHT, Button.TURN_LEFT],
+    [Button.MOVE_RIGHT, Button.MOVE_LEFT, Button.TURN_RIGHT, Button.TURN_LEFT],
+    # [Button.TURN_RIGHT, Button.TURN_LEFT],
     [Button.MOVE_FORWARD, Button.MOVE_BACKWARD],
-    [Button.ATTACK, Button.USE],
 ]
 
 # Buttons that can only be used alone.
@@ -121,51 +120,80 @@ def get_available_actions(buttons: np.array) -> t.List[t.List[float]]:
     return possible_actions.tolist()
 
 possible_actions = get_available_actions(np.array([
-    Button.ATTACK, Button.MOVE_FORWARD, Button.MOVE_LEFT, 
-    Button.MOVE_RIGHT, Button.TURN_LEFT, Button.TURN_RIGHT, Button.USE]))
+    Button.ATTACK, Button.MOVE_FORWARD, Button.MOVE_BACKWARD, Button.MOVE_LEFT, 
+    Button.MOVE_RIGHT, Button.TURN_LEFT, Button.TURN_RIGHT, Button.USE
+]))
 
 class DoomEnvSP(gym.Env):
     """Wrapper environment following Gymnasium interface for a VizDoom game instance."""
     
-    def __init__(self, game: vizdoom.DoomGame, frame_processor: t.Callable, frame_skip: int = 4, n_frames: int = 4):
+    def __init__(self, game: vizdoom.DoomGame, frame_processor: t.Callable, frame_skip: int = 4, n_frames: int = 4, automap_processor: t.Optional[t.Callable] = None):
         """Initialize the Doom environment with a game instance, frame processor, and frame skip."""
         super().__init__()
         
-        # Store number of frames to stack
         self.n_frames = n_frames
+        self.automap_processor = automap_processor
         
-        # Define action space: Discrete space based on number of available buttons
         self.action_space = spaces.Discrete(game.get_available_buttons_size())
         
-        # Define observation space: Processed screen buffer dimensions
         h, w, c = game.get_screen_height(), game.get_screen_width(), game.get_screen_channels()
         processed_shape = frame_processor(np.zeros((h, w, c))).shape
         
-        # Update observation space to account for stacked frames (channels are multiplied by n_frames)
-        self.single_frame_shape = processed_shape
-        stacked_channels = processed_shape[2] * n_frames  # Multiply channels by n_frames
-        
-        self.observation_space = spaces.Box(
-            low=0, 
-            high=255, 
-            shape=(processed_shape[0], processed_shape[1], stacked_channels),  # [H, W, C*n_frames]
-            dtype=np.uint8
-        )
-        
         # Store instance variables
+        self.single_frame_shape = processed_shape
         self.game = game
         self.possible_actions = possible_actions
         self.frame_skip = frame_skip
         self.frame_processor = frame_processor
         self.empty_frame = np.zeros(self.single_frame_shape, dtype=np.uint8)
         
-        # Initialize frame stack
-        self.frame_stack = [self.empty_frame] * n_frames
+        # Initialize observation shape
+        self.single_frame_shape = processed_shape
+        
+        if game.is_automap_buffer_enabled() and automap_processor is not None:
+            automap_h, automap_w, automap_c = game.get_screen_height(), game.get_screen_width(), 3  # Automap is RGB
+            automap_shape = automap_processor(np.zeros((automap_h, automap_w, automap_c))).shape
+            self.single_automap_shape = automap_shape
+            self.empty_automap = np.zeros(self.single_automap_shape, dtype=np.uint8)
+            
+            stacked_screen_channels = processed_shape[2] * n_frames
+            stacked_automap_channels = automap_shape[2] * n_frames
+            
+            self.observation_space = spaces.Dict({
+                'screen': spaces.Box(
+                    low=0, high=255,
+                    shape=(processed_shape[0], processed_shape[1], stacked_screen_channels),
+                    dtype=np.uint8
+                ),
+                'automap': spaces.Box(
+                    low=0, high=255,
+                    shape=(automap_shape[0], automap_shape[1], stacked_automap_channels),
+                    dtype=np.uint8
+                )
+            })
+            
+            self.screen_stack = [self.empty_frame] * n_frames
+            self.automap_stack = [self.empty_automap] * n_frames
+        else:
+            raise ValueError('Automap is not enabled')
+            stacked_channels = processed_shape[2] * n_frames  # Multiply channels by n_frames
+            
+            self.observation_space = spaces.Box(
+                low=0, 
+                high=255, 
+                shape=(processed_shape[0], processed_shape[1], stacked_channels),  # [H, W, C*n_frames]
+                dtype=np.uint8
+            )
+            
+            # Initialize frame stack
+            self.frame_stack = [self.empty_frame] * n_frames
+        
         self.state = self._get_stacked_frames()
 
-        self.prev_health = 100  # Typical starting health in Doom
+        self.prev_health = 100
         self.prev_armor = 0
         self.prev_ammo = 0
+        self.prev_hitcount = 0
         self.prev_killcount = 0
         self.prev_itemcount = 0
         self.prev_secretcount = 0
@@ -179,12 +207,19 @@ class DoomEnvSP(gym.Env):
         terminated = self.game.is_episode_finished()
         truncated = False  # VizDoom handles termination; no truncation needed here
         
-        new_frame = self._get_frame(terminated)
-        # Update frame stack with the new frame
-        self.frame_stack.pop(0)
-        self.frame_stack.append(new_frame)
-        self.state = self._get_stacked_frames()
+        if self.automap_processor is not None and self.game.is_automap_buffer_enabled():
+            new_screen, new_automap = self._get_frame(terminated)
+            self.screen_stack.pop(0)
+            self.screen_stack.append(new_screen)
+            self.automap_stack.pop(0)
+            self.automap_stack.append(new_automap)
+        else:
+            print("No automap!!!")
+            new_frame = self._get_frame(terminated)
+            self.frame_stack.pop(0)
+            self.frame_stack.append(new_frame)
         
+        self.state = self._get_stacked_frames()
         reward = self.get_reward(self.state, reward, terminated, truncated, {})
         return self.state, reward, terminated, truncated, {}
 
@@ -193,7 +228,6 @@ class DoomEnvSP(gym.Env):
         reward = 0
 
         if state:
-            # Current state variables
             curr_health = self.game.get_game_variable(GameVariable.HEALTH)
             curr_armor = self.game.get_game_variable(GameVariable.ARMOR)
             curr_ammo = sum(self.game.get_game_variable(variable) for variable in AMMO_VARIABLES)
@@ -252,9 +286,8 @@ class DoomEnvSP(gym.Env):
             reward += 10 * max(0, ammo_delta) + min(0, ammo_delta)
 
             # 11. Penalty for each step
-            reward -= 1
+            reward -= 10
 
-            # Update previous state variables
             self.prev_health = curr_health
             self.prev_armor = curr_armor
             self.prev_ammo = curr_ammo
@@ -270,9 +303,15 @@ class DoomEnvSP(gym.Env):
         super().reset(seed=seed)
         self.game.new_episode()
         
-        # Reset frame stack with initial frame
-        initial_frame = self._get_frame()
-        self.frame_stack = [initial_frame] * self.n_frames
+        if self.automap_processor is not None and self.game.is_automap_buffer_enabled():
+            initial_screen, initial_automap = self._get_frame()
+            self.screen_stack = [initial_screen] * self.n_frames
+            self.automap_stack = [initial_automap] * self.n_frames
+        else:
+            raise ValueError('Automap is not enabled')
+            initial_frame = self._get_frame()
+            self.frame_stack = [initial_frame] * self.n_frames
+        
         self.state = self._get_stacked_frames()
         
         state = self.game.get_state()
@@ -299,7 +338,20 @@ class DoomEnvSP(gym.Env):
 
     def _get_frame(self, done: bool = False) -> Frame:
         """Get the current frame, or an empty frame if the episode is done."""
-        return self.frame_processor(self.game.get_state().screen_buffer) if not done else self.empty_frame
+        if done:
+            if self.automap_processor is not None and self.game.is_automap_buffer_enabled():
+                return self.empty_frame, self.empty_automap
+            else:
+                return self.empty_frame
+        
+        state = self.game.get_state()
+        if self.automap_processor is not None and self.game.is_automap_buffer_enabled():
+            screen = self.frame_processor(state.screen_buffer)
+            automap = self.automap_processor(state.automap_buffer)
+            return screen, automap
+        else:
+            raise ValueError('Automap is not enabled')
+            return self.frame_processor(state.screen_buffer)
 
     def seed(self, seed: t.Optional[int] = None) -> t.List[t.Optional[int]]:
         """Set the seed for VizDoom's random number generator."""
@@ -309,5 +361,11 @@ class DoomEnvSP(gym.Env):
 
     def _get_stacked_frames(self) -> Frame:
         """Stack frames along the channel dimension (last axis for numpy arrays)."""
-        # Concatenate along the channel dimension (axis 2 for [H, W, C] format)
-        return np.concatenate(self.frame_stack, axis=2)
+        if self.automap_processor is not None and self.game.is_automap_buffer_enabled():
+            return {
+                'screen': np.concatenate(self.screen_stack, axis=2),
+                'automap': np.concatenate(self.automap_stack, axis=2)
+            }
+        else:
+            raise ValueError('Automap is not enabled')
+            return np.concatenate(self.frame_stack, axis=2)

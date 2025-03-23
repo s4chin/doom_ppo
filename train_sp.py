@@ -27,7 +27,13 @@ def create_env(config_path="config/test.cfg", map_name=None, render=False, n_fra
     if not render:
         game.set_window_visible(False)
     else:
-        game.set_window_visible(False)
+        game.set_window_visible(True)
+    
+    # Enable automap
+    game.set_automap_buffer_enabled(True)
+    game.set_automap_mode(vizdoom.AutomapMode.OBJECTS)
+    game.set_automap_rotate(True)
+    game.set_automap_render_textures(True)
         
     game.init()
     return DoomEnvSP(game, n_frames=n_frames, **kwargs)
@@ -60,11 +66,14 @@ def create_vec_env(n_envs=1, is_eval=False, maps=None, **kwargs) -> DummyVecEnv:
         return DummyVecEnv([lambda i=i: create_env(render=(i==0), **kwargs) for i in range(n_envs)])
 
 def frame_processor(frame: Frame) -> Frame:
-    # Removed print statement to avoid clutter during training
     frame = cv2.resize(frame, None, fx=0.5, fy=0.5, interpolation=cv2.INTER_AREA)
     frame = frame[10:-10, 2:-2, :]
     return frame
 
+def automap_processor(automap: Frame) -> Frame:
+    automap = cv2.resize(automap, None, fx=0.5, fy=0.5, interpolation=cv2.INTER_AREA)
+    automap = automap[10:-10, 2:-2, :]
+    return automap
 
 def create_agent(env, **kwargs) -> PPO:
     """Create a PPO agent with a CNN policy."""
@@ -96,16 +105,12 @@ class RewardAverageCallback(BaseCallback):
         self.window_size = 10  # Number of episodes to average over
 
     def _on_step(self) -> bool:
-        # Get episode info from each environment
         for info in self.locals['infos']:
             if 'episode' in info:
-                # Store the episode reward
                 self.episode_rewards.append(info['episode']['r'])
-                # Only keep the most recent window_size rewards
                 if len(self.episode_rewards) > self.window_size:
                     self.episode_rewards.pop(0)
                 
-                # Calculate and log the running average if we have enough episodes
                 if len(self.episode_rewards) > 0:
                     avg_reward = sum(self.episode_rewards) / len(self.episode_rewards)
                     self.logger.record('rollout/reward_running_avg', avg_reward)
@@ -133,11 +138,11 @@ def solve_env(env_args, n_envs, agent_args, maps=None):
     evaluation_callback = EvalCallback(
         eval_env,
         n_eval_episodes=3,
-        eval_freq=10000,
+        eval_freq=5000,
         log_path="logs/evaluations/multi_map",
         best_model_save_path="logs/models/multi_map",
         deterministic=True,
-        render=False  # This doesn't control the game window, just whether to render in the callback
+        render=False
     )
     
     reward_callback = RewardAverageCallback()
@@ -160,15 +165,15 @@ if __name__ == "__main__":
     env_args = {
         "frame_skip": 4,
         "frame_processor": frame_processor,
+        "automap_processor": automap_processor,
         "config_path": "config/test.cfg",
         "n_frames": 4  # Add n_frames parameter
     }
 
-    # Define the list of maps to train on
     doom_maps = [f"E1M{i}" for i in range(1, 10)]  # E1M1 through E1M9
     
     # Using parallel environments with different maps
-    n_envs = 4  # Increased to have more map coverage
+    n_envs = 1
     agent_args = {}
     agent_args['policy_kwargs'] = {'features_extractor_class': CustomCNN}
 
