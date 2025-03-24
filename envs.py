@@ -1,3 +1,4 @@
+import math
 import numpy as np
 import vizdoom
 import gymnasium as gym
@@ -118,54 +119,43 @@ def get_available_actions(buttons: np.array) -> t.List[t.List[float]]:
     print('Built action space of size {} from buttons {}'.format(len(possible_actions), buttons))
     return possible_actions.tolist()
 
-possible_actions = get_available_actions(np.array([
-    Button.ATTACK, Button.MOVE_FORWARD, Button.MOVE_BACKWARD, Button.MOVE_LEFT, 
-    Button.MOVE_RIGHT, Button.TURN_LEFT, Button.TURN_RIGHT, Button.USE
-]))
 
 class DoomEnvSP(gym.Env):
     """Wrapper environment following Gymnasium interface for a VizDoom game instance."""
     
-    def __init__(self, game: vizdoom.DoomGame, frame_processor: t.Callable, frame_skip: int = 4, n_frames: int = 4, automap_processor: t.Optional[t.Callable] = None, n_actions_history: int = 32):
+    def __init__(self, game: vizdoom.DoomGame, frame_processor: t.Callable, automap_processor: t.Optional[t.Callable] = None, frame_skip: int = 4, n_frames: int = 4, n_actions_history: int = 32):
         """Initialize the Doom environment with a game instance, frame processor, and frame skip."""
         super().__init__()
         
         self.n_frames = n_frames
-        self.automap_processor = automap_processor
         self.n_actions_history = n_actions_history
-        
-        self.action_space = spaces.Discrete(game.get_available_buttons_size())
-        
+
         h, w, c = game.get_screen_height(), game.get_screen_width(), game.get_screen_channels()
-        processed_shape = frame_processor(np.zeros((h, w, c))).shape
-        
-        # Store instance variables
-        self.single_frame_shape = processed_shape
+        frame_shape = frame_processor(np.zeros((h, w, c))).shape
+        self.single_frame_shape = frame_shape
+
         self.game = game
-        self.possible_actions = possible_actions
+        self.possible_actions = get_available_actions(game.get_available_buttons())
+        self.action_space = spaces.Discrete(len(self.possible_actions))
         self.frame_skip = frame_skip
+
         self.frame_processor = frame_processor
+        self.automap_processor = automap_processor
+
         self.empty_frame = np.zeros(self.single_frame_shape, dtype=np.uint8)
-        
-        # Initialize observation shape
-        self.single_frame_shape = processed_shape
-        
-        # Initialize action history with zeros
         self.action_history = np.zeros((self.n_actions_history,), dtype=np.int64)
         
         if game.is_automap_buffer_enabled() and automap_processor is not None:
-            automap_h, automap_w, automap_c = game.get_screen_height(), game.get_screen_width(), 3  # Automap is RGB
-            automap_shape = automap_processor(np.zeros((automap_h, automap_w, automap_c))).shape
-            self.single_automap_shape = automap_shape
-            self.empty_automap = np.zeros(self.single_automap_shape, dtype=np.uint8)
+            automap_shape = frame_shape
+            self.empty_automap = np.zeros(automap_shape, dtype=np.uint8)
             
-            stacked_screen_channels = processed_shape[2] * n_frames
+            stacked_screen_channels = frame_shape[2] * n_frames
             stacked_automap_channels = automap_shape[2] * n_frames
             
             self.observation_space = spaces.Dict({
                 'screen': spaces.Box(
                     low=0, high=255,
-                    shape=(processed_shape[0], processed_shape[1], stacked_screen_channels),
+                    shape=(frame_shape[0], frame_shape[1], stacked_screen_channels),
                     dtype=np.uint8
                 ),
                 'automap': spaces.Box(
@@ -184,17 +174,6 @@ class DoomEnvSP(gym.Env):
             self.automap_stack = [self.empty_automap] * n_frames
         else:
             raise ValueError('Automap is not enabled')
-            stacked_channels = processed_shape[2] * n_frames  # Multiply channels by n_frames
-            
-            self.observation_space = spaces.Box(
-                low=0, 
-                high=255, 
-                shape=(processed_shape[0], processed_shape[1], stacked_channels),  # [H, W, C*n_frames]
-                dtype=np.uint8
-            )
-            
-            # Initialize frame stack
-            self.frame_stack = [self.empty_frame] * n_frames
         
         self.state = self._get_stacked_frames()
 
@@ -205,9 +184,11 @@ class DoomEnvSP(gym.Env):
         self.prev_killcount = self.game.get_game_variable(GameVariable.KILLCOUNT)
         self.prev_itemcount = self.game.get_game_variable(GameVariable.ITEMCOUNT)
         self.prev_secretcount = self.game.get_game_variable(GameVariable.SECRETCOUNT)
-        self.visited_cells = set()
-        self.last_x, self.last_y = self.game.get_game_variable(GameVariable.POSITION_X), self.game.get_game_variable(GameVariable.POSITION_Y)
-        self.grid_size = 50  # Grid size for exploration; adjust based on map scale
+        self.grid_size = 256  # Grid size for exploration; adjust based on map scale
+        self.start_x, self.start_y = self.game.get_game_variable(GameVariable.POSITION_X), self.game.get_game_variable(GameVariable.POSITION_Y)
+
+        # self.last_x, self.last_y = self.game.get_game_variable(GameVariable.POSITION_X), self.game.get_game_variable(GameVariable.POSITION_Y)
+        self.visited_cells = {(math.floor(self.start_x / self.grid_size), math.floor(self.start_y / self.grid_size))}
 
     def step(self, action: int) -> t.Tuple[Frame, float, bool, bool, dict]:
         """Apply an action to the environment and return the resulting state."""
@@ -281,23 +262,35 @@ class DoomEnvSP(gym.Env):
             # cell = (grid_x, grid_y)
             # if cell not in self.visited_cells:
             #     self.visited_cells.add(cell)
-            #     l1_distance = abs(grid_x - int(self.start_x / self.grid_size)) + \
-            #                  abs(grid_y - int(self.start_y / self.grid_size))
-            #     reward += 20 * (1 + 0.5 * l1_distance)
+            #     # l1_distance = abs(grid_x - int(self.start_x / self.grid_size)) + \
+            #     #              abs(grid_y - int(self.start_y / self.grid_size))
+            #     # reward += 20 * (1 + 0.5 * l1_distance)
+            #     reward += 2.0
+            # else:
+            #     reward += -0.5
             
-            # 7. Staying still penalty: Not yet added
-            # Player can move at ~16.66 units per tick
-            # Source - https://github.com/arnaudstiegler/gameNgen-repro/blob/main/ViZDoomPPO/train_ppo_parallel.py#L38
-            dx = curr_x - self.last_x
-            dy = curr_y - self.last_y
+            grid_x = math.floor(curr_x / self.grid_size)
+            grid_y = math.floor(curr_y / self.grid_size)
+            cell = (grid_x, grid_y)
+            if cell not in self.visited_cells:
+                self.visited_cells.add(cell)
+                l1_distance = abs(grid_x - math.floor(self.start_x / self.grid_size)) + \
+                             abs(grid_y - math.floor(self.start_y / self.grid_size))
+                reward += 20 * (1 + 0.5 * l1_distance)
+            
+            # # 7. Staying still penalty: Not yet added
+            # # Player can move at ~16.66 units per tick
+            # # Source - https://github.com/arnaudstiegler/gameNgen-repro/blob/main/ViZDoomPPO/train_ppo_parallel.py#L38
+            # dx = curr_x - self.last_x
+            # dy = curr_y - self.last_y
 
-            distance = np.sqrt(dx**2 + dy**2)
-            if distance - 3.0 > 0:
-                reward += 25
-            else:
-                reward += -25
-            self.last_x = curr_x
-            self.last_y = curr_y
+            # distance = np.sqrt(dx**2 + dy**2)
+            # if distance - 3.0 > 0:
+            #     reward += 25
+            # else:
+            #     reward += -25
+            # self.last_x = curr_x
+            # self.last_y = curr_y
 
             # 8. Health delta: 10 * change in health
             health_delta = curr_health - self.prev_health
@@ -349,9 +342,9 @@ class DoomEnvSP(gym.Env):
             self.prev_killcount = self.game.get_game_variable(GameVariable.KILLCOUNT)
             self.prev_itemcount = self.game.get_game_variable(GameVariable.ITEMCOUNT)
             self.prev_secretcount = self.game.get_game_variable(GameVariable.SECRETCOUNT)
-            self.start_x = self.game.get_game_variable(GameVariable.POSITION_X)
-            self.start_y = self.game.get_game_variable(GameVariable.POSITION_Y)
-            self.visited_cells = {(int(self.start_x / self.grid_size), int(self.start_y / self.grid_size))}
+            # self.last_x = self.game.get_game_variable(GameVariable.POSITION_X)
+            # self.last_y = self.game.get_game_variable(GameVariable.POSITION_Y)
+            self.visited_cells = {(math.floor(self.start_x / self.grid_size), math.floor(self.start_y / self.grid_size))}
         return self.state, {}
 
     def close(self) -> None:

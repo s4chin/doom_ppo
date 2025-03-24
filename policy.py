@@ -4,12 +4,10 @@ from stable_baselines3.common.policies import ActorCriticPolicy
 from gymnasium import spaces
 import torch
 import torch.nn as nn
-
-from envs import possible_actions
-
+import random
 
 class CustomCNN(BaseFeaturesExtractor):
-    def __init__(self, observation_space: spaces.Box, features_dim: int = 512, **kwargs):
+    def __init__(self, observation_space: spaces.Box, features_dim: int = 512, action_space_dim: int = 20, **kwargs):
         super().__init__(observation_space, features_dim)
         
         # Check if observation space is Dict (contains both screen and automap)
@@ -58,7 +56,7 @@ class CustomCNN(BaseFeaturesExtractor):
                 nn.Flatten(),
             )
 
-            self.action_history_embedding = nn.Embedding(32, 8)
+            self.action_history_embedding = nn.Embedding(action_space_dim, 8)
             self.action_history_net = nn.Sequential(
                 nn.Flatten(),
                 nn.Linear(32 * 8, 128),
@@ -86,6 +84,9 @@ class CustomCNN(BaseFeaturesExtractor):
     def forward(self, observations: torch.Tensor) -> torch.Tensor:
         # Check if observations is a dict (contains both screen and automap)
         if isinstance(observations, dict):
+            # if random.random() < 0.1:
+            #     save_as_image(observations)
+            #     print(f"{observations['action_history']=}")
             # Process screen and automap separately
             screen_features = self.screen_cnn(observations['screen'])
             automap_features = self.automap_cnn(observations['automap'])
@@ -107,8 +108,10 @@ def save_as_image(observations: torch.Tensor):
     # Convert automap to PIL image and save it
     from PIL import Image
     import numpy as np
-    automap_image = Image.fromarray((observations['automap'].numpy()[0][:3, :, :].transpose(1, 2, 0) * 255.).astype(np.uint8))
-    automap_image.save('automap.png')
+    for i in range(0, 12, 3):
+        automap_image = Image.fromarray((observations['automap'].numpy()[0][i:i+3, :, :].transpose(1, 2, 0) * 255.).astype(np.uint8))
+        automap_image.save(f'automap_{i}.png')
 
-    automap_image = Image.fromarray((observations['screen'].numpy()[0][:3, :, :].transpose(1, 2, 0) * 255.).astype(np.uint8))
-    automap_image.save('screen.png')
+    for i in range(0, 12, 3):
+        screen_image = Image.fromarray((observations['screen'].numpy()[0][i:i+3, :, :].transpose(1, 2, 0) * 255.).astype(np.uint8))
+        screen_image.save(f'screen_{i}.png')

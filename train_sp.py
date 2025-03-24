@@ -140,7 +140,7 @@ def solve_env(env_args, n_envs, agent_args, maps=None):
     callbacks = [evaluation_callback, reward_callback, checkpoint_callback]
     
     agent.learn(
-        total_timesteps=1000000,
+        total_timesteps=10000000,
         tb_log_name="ppo_multi_map",
         callback=callbacks
     )
