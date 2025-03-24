@@ -206,7 +206,7 @@ class DoomEnvSP(gym.Env):
         self.prev_itemcount = self.game.get_game_variable(GameVariable.ITEMCOUNT)
         self.prev_secretcount = self.game.get_game_variable(GameVariable.SECRETCOUNT)
         self.visited_cells = set()
-        self.start_x, self.start_y = self.game.get_game_variable(GameVariable.POSITION_X), self.game.get_game_variable(GameVariable.POSITION_Y)
+        self.last_x, self.last_y = self.game.get_game_variable(GameVariable.POSITION_X), self.game.get_game_variable(GameVariable.POSITION_Y)
         self.grid_size = 50  # Grid size for exploration; adjust based on map scale
 
     def step(self, action: int) -> t.Tuple[Frame, float, bool, bool, dict]:
@@ -276,14 +276,28 @@ class DoomEnvSP(gym.Env):
                 reward += 500 * (curr_secretcount - self.prev_secretcount)
 
             # 7. Exploration: Reward for new areas based on grid
-            grid_x = int(curr_x / self.grid_size)
-            grid_y = int(curr_y / self.grid_size)
-            cell = (grid_x, grid_y)
-            if cell not in self.visited_cells:
-                self.visited_cells.add(cell)
-                l1_distance = abs(grid_x - int(self.start_x / self.grid_size)) + \
-                             abs(grid_y - int(self.start_y / self.grid_size))
-                reward += 20 * (1 + 0.5 * l1_distance)
+            # grid_x = int(curr_x / self.grid_size)
+            # grid_y = int(curr_y / self.grid_size)
+            # cell = (grid_x, grid_y)
+            # if cell not in self.visited_cells:
+            #     self.visited_cells.add(cell)
+            #     l1_distance = abs(grid_x - int(self.start_x / self.grid_size)) + \
+            #                  abs(grid_y - int(self.start_y / self.grid_size))
+            #     reward += 20 * (1 + 0.5 * l1_distance)
+            
+            # 7. Staying still penalty: Not yet added
+            # Player can move at ~16.66 units per tick
+            # Source - https://github.com/arnaudstiegler/gameNgen-repro/blob/main/ViZDoomPPO/train_ppo_parallel.py#L38
+            dx = curr_x - self.last_x
+            dy = curr_y - self.last_y
+
+            distance = np.sqrt(dx**2 + dy**2)
+            if distance - 3.0 > 0:
+                reward += 25
+            else:
+                reward += -25
+            self.last_x = curr_x
+            self.last_y = curr_y
 
             # 8. Health delta: 10 * change in health
             health_delta = curr_health - self.prev_health
@@ -296,8 +310,6 @@ class DoomEnvSP(gym.Env):
             # 10. Ammo delta: 10 * positive change, 1 * negative change
             ammo_delta = curr_ammo - self.prev_ammo
             reward += 10 * max(0, ammo_delta) + min(0, ammo_delta)
-
-            # 11. Staying still penalty: Not yet added
 
             self.prev_health = curr_health
             self.prev_armor = curr_armor
