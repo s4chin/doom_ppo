@@ -10,97 +10,88 @@ class CustomCNN(BaseFeaturesExtractor):
     def __init__(self, observation_space: spaces.Box, features_dim: int = 512, action_space_dim: int = 20, **kwargs):
         super().__init__(observation_space, features_dim)
         
-        # Check if observation space is Dict (contains both screen and automap)
-        if isinstance(observation_space, spaces.Dict):
-            print(f"{observation_space.keys()}")
-            # Get dimensions from screen and automap spaces
-            screen_channels = observation_space['screen'].shape[0]
-            automap_channels = observation_space['automap'].shape[0]
+        print(f"{observation_space.keys()}")
+        # Get dimensions from screen and automap spaces
+        screen_channels = observation_space['screen'].shape[0]
+        automap_channels = observation_space['automap'].shape[0]
+        
+        # Create separate CNNs for screen and automap
+        # Screen CNN
+        self.screen_cnn = nn.Sequential(
+            # PyTorch expects [N, C, H, W] but we have [N, H, W, C], so we'll handle this in forward()
+            nn.LayerNorm([screen_channels, 100, 156]),
             
-            # Create separate CNNs for screen and automap
-            # Screen CNN
-            self.screen_cnn = nn.Sequential(
-                # PyTorch expects [N, C, H, W] but we have [N, H, W, C], so we'll handle this in forward()
-                nn.LayerNorm([screen_channels, 100, 156]),
-                
-                nn.Conv2d(screen_channels, 32, kernel_size=8, stride=4, padding=0, bias=False),
-                nn.LayerNorm([32, 24, 38]),
-                nn.LeakyReLU(**kwargs),
-                
-                nn.Conv2d(32, 64, kernel_size=4, stride=2, padding=0, bias=False),
-                nn.LayerNorm([64, 11, 18]),
-                nn.LeakyReLU(**kwargs),
-                
-                nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=0, bias=False),
-                nn.LayerNorm([64, 9, 16]),
-                nn.LeakyReLU(**kwargs),
-                
-                nn.Flatten(),
-            )
+            nn.Conv2d(screen_channels, 32, kernel_size=8, stride=4, padding=0, bias=False),
+            nn.LayerNorm([32, 24, 38]),
+            nn.LeakyReLU(**kwargs),
             
-            self.automap_cnn = nn.Sequential(
-                nn.LayerNorm([automap_channels, 100, 156]),
-                
-                nn.Conv2d(automap_channels, 16, kernel_size=8, stride=4, padding=0, bias=False),
-                nn.LayerNorm([16, 24, 38]),
-                nn.LeakyReLU(**kwargs),
-                
-                nn.Conv2d(16, 32, kernel_size=4, stride=2, padding=0, bias=False),
-                nn.LayerNorm([32, 11, 18]),
-                nn.LeakyReLU(**kwargs),
-                
-                nn.Conv2d(32, 32, kernel_size=3, stride=1, padding=0, bias=False),
-                nn.LayerNorm([32, 9, 16]),
-                nn.LeakyReLU(**kwargs),
-                
-                nn.Flatten(),
-            )
+            nn.Conv2d(32, 64, kernel_size=4, stride=2, padding=0, bias=False),
+            nn.LayerNorm([64, 11, 18]),
+            nn.LeakyReLU(**kwargs),
+            
+            nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=0, bias=False),
+            nn.LayerNorm([64, 9, 16]),
+            nn.LeakyReLU(**kwargs),
+            
+            nn.Flatten(),
+        )
+        
+        self.automap_cnn = nn.Sequential(
+            nn.LayerNorm([automap_channels, 100, 156]),
+            
+            nn.Conv2d(automap_channels, 16, kernel_size=8, stride=4, padding=0, bias=False),
+            nn.LayerNorm([16, 24, 38]),
+            nn.LeakyReLU(**kwargs),
+            
+            nn.Conv2d(16, 32, kernel_size=4, stride=2, padding=0, bias=False),
+            nn.LayerNorm([32, 11, 18]),
+            nn.LeakyReLU(**kwargs),
+            
+            nn.Conv2d(32, 32, kernel_size=3, stride=1, padding=0, bias=False),
+            nn.LayerNorm([32, 9, 16]),
+            nn.LeakyReLU(**kwargs),
+            
+            nn.Flatten(),
+        )
 
-            self.action_history_embedding = nn.Embedding(action_space_dim, 8)
-            self.action_history_net = nn.Sequential(
-                nn.Flatten(),
-                nn.Linear(32 * 8, 128),
-                nn.LayerNorm(128),
-                nn.LeakyReLU(**kwargs),
-                nn.Linear(128, 32),
-                nn.LayerNorm(32),
-                nn.LeakyReLU(**kwargs),
-            )
-            
-            # Calculate output sizes for both CNNs
-            screen_output_size = 9216  # 64 * 9 * 16
-            automap_output_size = 4608  # 32 * 9 * 16
-            action_history_output_size = 32
-            
-            # Create a combined linear layer
-            self.linear = nn.Sequential(
-                nn.Linear(screen_output_size + automap_output_size + action_history_output_size, features_dim, bias=False),
-                nn.LayerNorm(features_dim),
-                nn.LeakyReLU(**kwargs),
-            )
-        else:
-            raise ValueError('Observation space must be a dict containing both screen and automap')
+        self.action_history_embedding = nn.Embedding(action_space_dim, 8)
+        self.action_history_net = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(32 * 8, 128),
+            nn.LayerNorm(128),
+            nn.LeakyReLU(**kwargs),
+            nn.Linear(128, 32),
+            nn.LayerNorm(32),
+            nn.LeakyReLU(**kwargs),
+        )
+        
+        # Calculate output sizes for both CNNs
+        screen_output_size = 9216  # 64 * 9 * 16
+        automap_output_size = 4608  # 32 * 9 * 16
+        action_history_output_size = 32
+        
+        # Create a combined linear layer
+        self.linear = nn.Sequential(
+            nn.Linear(screen_output_size + automap_output_size + action_history_output_size, features_dim, bias=False),
+            nn.LayerNorm(features_dim),
+            nn.LeakyReLU(**kwargs),
+        )
 
     def forward(self, observations: torch.Tensor) -> torch.Tensor:
-        # Check if observations is a dict (contains both screen and automap)
-        if isinstance(observations, dict):
-            # if random.random() < 0.1:
-            #     save_as_image(observations)
-            #     print(f"{observations['action_history']=}")
-            # Process screen and automap separately
-            screen_features = self.screen_cnn(observations['screen'])
-            automap_features = self.automap_cnn(observations['automap'])
-            action_history_features = self.action_history_embedding(observations['action_history'].long())
-            action_history_features = self.action_history_net(action_history_features)
+        # if random.random() < 0.1:
+        #     save_as_image(observations)
+        #     print(f"{observations['action_history']=}")
+        # Process screen and automap separately
+        screen_features = self.screen_cnn(observations['screen'])
+        automap_features = self.automap_cnn(observations['automap'])
+        action_history_features = self.action_history_embedding(observations['action_history'].long())
+        action_history_features = self.action_history_net(action_history_features)
 
-            # print(f"{screen_features.shape=}, {automap_features.shape=}, {action_history_features.shape=}")
-            
-            # Concatenate features and pass through linear layer
-            combined_features = torch.cat([screen_features, automap_features, action_history_features], dim=1)
-            return self.linear(combined_features)
-        else:
-            print('Not using automap')
-            return self.linear(self.cnn(observations))
+        # print(f"{screen_features.shape=}, {automap_features.shape=}, {action_history_features.shape=}")
+        
+        # Concatenate features and pass through linear layer
+        combined_features = torch.cat([screen_features, automap_features, action_history_features], dim=1)
+        return self.linear(combined_features)
 
 
 # Unused for now, making sure screen and automap are processed correctly

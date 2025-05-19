@@ -31,7 +31,7 @@ def create_env(config_path="config/test.cfg", map_name=None, render=False, n_fra
     if not render:
         game.set_window_visible(False)
     else:
-        game.set_window_visible(False)
+        game.set_window_visible(True)
     
     # Enable automap
     game.set_automap_buffer_enabled(True)
@@ -42,39 +42,36 @@ def create_env(config_path="config/test.cfg", map_name=None, render=False, n_fra
     game.init()
     return DoomEnvSP(game, n_frames=n_frames, **kwargs)
 
-def create_vec_env(n_envs=1, is_eval=False, maps=None, **kwargs) -> DummyVecEnv:
+def create_vec_env(map, n_envs=1, is_eval=False, **kwargs) -> DummyVecEnv:
     """Create a vectorized environment with multiple DoomEnv instances, potentially using different maps."""
     if is_eval:
         # For evaluation, always use E1M1 and render it
         eval_kwargs = kwargs.copy()
-        eval_kwargs["map_name"] = "E1M1"
+        eval_kwargs["map_name"] = map
         eval_kwargs["render"] = True  # Always render the eval environment
         return DummyVecEnv([lambda: Monitor(create_env(**eval_kwargs), f"logs/monitor/eval")] * n_envs)
     
-    if maps and len(maps) > 0:
-        # Create environments with different maps for training
-        # Maps are selected in a round-robin fashion
-        env_creators = []
-        for i in range(n_envs):
-            map_name = maps[i % len(maps)]
-            env_kwargs = kwargs.copy()
-            env_kwargs["map_name"] = map_name
-            
-            # Only render the first environment for viewing
-            env_kwargs["render"] = (i == 0)
-            
-            env_creators.append(lambda env_kwargs=env_kwargs: create_env(**env_kwargs))
-        return DummyVecEnv(env_creators)
-    else:
-        # Default behavior if no maps are specified
-        return DummyVecEnv([lambda i=i: create_env(render=(i==0), **kwargs) for i in range(n_envs)])
+    env_creators = []
+    for i in range(n_envs):
+        env_kwargs = kwargs.copy()
+        env_kwargs["map_name"] = map
+        
+        # Only render the first environment for viewing
+        env_kwargs["render"] = (i == 0)
+        
+        env_creators.append(lambda env_kwargs=env_kwargs: create_env(**env_kwargs))
+    return DummyVecEnv(env_creators)
 
+# TODO: remove cropping and the frame resize 
 def frame_processor(frame: Frame) -> Frame:
+    print(f"Inside frame_processor(): {frame.shape=}")
+    # frame.shape is (240, 320, 3) which we resize to (120, 160) then crop to (100, 156)
     frame = cv2.resize(frame, None, fx=0.5, fy=0.5, interpolation=cv2.INTER_AREA)
     frame = frame[10:-10, 2:-2, :]
     return frame
 
 def automap_processor(automap: Frame) -> Frame:
+    print(f"Inside automap_processor(): {automap.shape=}")
     automap = cv2.resize(automap, None, fx=0.5, fy=0.5, interpolation=cv2.INTER_AREA)
     automap = automap[10:-10, 2:-2, :]
     return automap
@@ -100,22 +97,19 @@ def create_agent(env, **kwargs) -> PPO:
     )
 
 
-def solve_env(env_args, n_envs, agent_args, maps=None):
+def solve_env(env_args, n_envs, agent_args, map):
     """Train agent on multiple maps in parallel."""
     
-    training_env = create_vec_env(n_envs=n_envs, maps=maps, **env_args)
+    training_env = create_vec_env(map=map, n_envs=n_envs, **env_args)
     
-    # Eval env is always E1M1 for now
-    eval_env = create_vec_env(n_envs=1, is_eval=True, **env_args)
+    # Use only one eval env
+    eval_env = create_vec_env(map=map, n_envs=1, is_eval=True, **env_args)
     
     agent = create_agent(training_env, **agent_args)
     
-    print(f"Training on {len(maps) if maps else 1} maps across {n_envs} environments")
+    print(f"Training on {map} across {n_envs} environments")
     print(f"Rendering only the first training environment")
     print(f"Rendering the evaluation environment")
-    if maps:
-        print(f"Maps: {', '.join(maps)}")
-    print(f"Evaluating on: E1M1")
     
     evaluation_callback = EvalCallback(
         eval_env,
@@ -124,7 +118,7 @@ def solve_env(env_args, n_envs, agent_args, maps=None):
         log_path="logs/evaluations/multi_map",
         best_model_save_path="logs/models/multi_map",
         deterministic=True,
-        render=False
+        render=False,
     )
     
     reward_callback = RewardAverageCallback()
@@ -140,7 +134,7 @@ def solve_env(env_args, n_envs, agent_args, maps=None):
     callbacks = [evaluation_callback, reward_callback, checkpoint_callback]
     
     agent.learn(
-        total_timesteps=10000000,
+        total_timesteps=10_000_000,
         tb_log_name="ppo_multi_map",
         callback=callbacks
     )
@@ -156,14 +150,13 @@ if __name__ == "__main__":
         "frame_processor": frame_processor,
         "automap_processor": automap_processor,
         "config_path": "config/test.cfg",
-        "n_frames": 4, # stacking frames for CNN input
+        "n_frames": 32, # stacking frames for CNN input
         "n_actions_history": 32  # track last 32 actions for actor-critic models, doesn't go through CNN
     }
 
-    # doom_maps = [f"E1M{i}" for i in range(1, 10)]  # E1M1 through E1M9
-    doom_maps = ["E1M1"] # for testing
+    doom_map = "E1M2"
     
-    n_envs = 8
+    n_envs = 1 # For testing
     agent_args = {}
     
     # Add policy_kwargs to specify our CustomCNN as the features extractor
@@ -172,4 +165,4 @@ if __name__ == "__main__":
         'features_extractor_kwargs': {'features_dim': 512}
     }
 
-    solve_env(env_args, n_envs, agent_args=agent_args, maps=doom_maps)
+    solve_env(env_args, n_envs, agent_args=agent_args, map=doom_map)
