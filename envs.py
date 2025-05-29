@@ -242,6 +242,8 @@ class DoomEnvSP(gym.Env):
             self.prev_killcount = self.game.get_game_variable(GameVariable.KILLCOUNT)
             self.prev_itemcount = self.game.get_game_variable(GameVariable.ITEMCOUNT)
             self.prev_secretcount = self.game.get_game_variable(GameVariable.SECRETCOUNT)
+            
+            self.start_x, self.start_y = self.game.get_game_variable(GameVariable.POSITION_X), self.game.get_game_variable(GameVariable.POSITION_Y)
             self.visited_cells = {(math.floor(self.start_x / self.grid_size), math.floor(self.start_y / self.grid_size))}
         return self.state, {}
 
@@ -269,7 +271,7 @@ class DoomEnvSP(gym.Env):
             self.game.set_seed(seed)
         return [seed]
 
-    def _get_stacked_frames(self) -> Frame:
+    def _get_stacked_frames(self) -> dict[str, object]:
         """Stack frames along the channel dimension (last axis for numpy arrays)."""
         return {
             'screen': np.concatenate(self.screen_stack, axis=2),

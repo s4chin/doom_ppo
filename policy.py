@@ -9,7 +9,6 @@ class CustomCNN(BaseFeaturesExtractor):
     def __init__(self, observation_space: spaces.Box, features_dim: int = 512, action_space_dim: int = 20, **kwargs):
         super().__init__(observation_space, features_dim)
         
-        print(f"{observation_space.keys()}")
         # Get dimensions from screen and automap spaces
         screen_channels = observation_space['screen'].shape[0]
         automap_channels = observation_space['automap'].shape[0]

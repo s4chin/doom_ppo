@@ -6,6 +6,7 @@ from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import EvalCallback, CheckpointCallback
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env import DummyVecEnv
+from stable_baselines3.common.vec_env import VecTransposeImage
 
 from callbacks import RewardAverageCallback
 from envs import DoomEnvSP
@@ -97,6 +98,9 @@ def solve_env(env_args, n_envs, agent_args, map):
     
     agent = create_agent(training_env, **agent_args)
     
+    # Wrap the eval environment with VecTransposeImage to match what PPO does automatically
+    eval_env = VecTransposeImage(eval_env)
+    
     print(f"Training on {map} across {n_envs} environments")
     print(f"Rendering only the first training environment")
     print(f"Rendering the evaluation environment")
@@ -107,7 +111,7 @@ def solve_env(env_args, n_envs, agent_args, map):
         eval_freq=5000,
         log_path="logs/evaluations/multi_map",
         best_model_save_path="logs/models/multi_map",
-        deterministic=True,
+        deterministic=False,
         render=False,
     )
     
@@ -152,7 +156,7 @@ if __name__ == "__main__":
     # Add policy_kwargs to specify our CustomCNN as the features extractor
     agent_args['policy_kwargs'] = {
         'features_extractor_class': CustomCNN,
-        'features_extractor_kwargs': {'features_dim': 512}
+        'features_extractor_kwargs': {'features_dim': 512, 'action_space_dim': 16}
     }
 
     solve_env(env_args, n_envs, agent_args=agent_args, map=doom_map)
