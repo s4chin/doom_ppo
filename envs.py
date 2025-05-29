@@ -81,7 +81,7 @@ class DoomEnvSP(gym.Env):
         self.automap_processor = automap_processor
 
         self.empty_frame = np.zeros(self.single_frame_shape, dtype=np.uint8)
-        self.action_history = np.zeros((self.n_actions_history,), dtype=np.int64)
+        self.action_history = np.full((self.n_actions_history,), -1, dtype=np.int64)
         
         if game.is_automap_buffer_enabled():
             automap_shape = frame_shape
@@ -102,7 +102,7 @@ class DoomEnvSP(gym.Env):
                     dtype=np.uint8
                 ),
                 'action_history': spaces.Box(
-                    low=0, high=len(self.possible_actions)-1,
+                    low=-1, high=len(self.possible_actions)-1,
                     shape=(self.n_actions_history,),
                     dtype=np.int64
                 )
@@ -225,7 +225,7 @@ class DoomEnvSP(gym.Env):
         self.game.new_episode()
         
         # Reset action history
-        self.action_history = np.zeros((self.n_actions_history,), dtype=np.int64)
+        self.action_history = np.full((self.n_actions_history,), -1, dtype=np.int64)
         
         initial_screen, initial_automap = self._get_frame()
         self.screen_stack = [initial_screen] * self.n_frames

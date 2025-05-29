@@ -45,7 +45,6 @@ def create_env(config_path="config/test.cfg", map_name=None, render=False, n_fra
 def create_vec_env(map, n_envs=1, is_eval=False, **kwargs) -> DummyVecEnv:
     """Create a vectorized environment with multiple DoomEnv instances, potentially using different maps."""
     if is_eval:
-        # For evaluation, always use E1M1 and render it
         eval_kwargs = kwargs.copy()
         eval_kwargs["map_name"] = map
         eval_kwargs["render"] = True  # Always render the eval environment
@@ -62,19 +61,10 @@ def create_vec_env(map, n_envs=1, is_eval=False, **kwargs) -> DummyVecEnv:
         env_creators.append(lambda env_kwargs=env_kwargs: create_env(**env_kwargs))
     return DummyVecEnv(env_creators)
 
-# TODO: remove cropping and the frame resize 
 def frame_processor(frame: Frame) -> Frame:
-    print(f"Inside frame_processor(): {frame.shape=}")
-    # frame.shape is (240, 320, 3) which we resize to (120, 160) then crop to (100, 156)
+    # frame.shape is (240, 320, 3) which we resize to (120, 160)
     frame = cv2.resize(frame, None, fx=0.5, fy=0.5, interpolation=cv2.INTER_AREA)
-    frame = frame[10:-10, 2:-2, :]
     return frame
-
-def automap_processor(automap: Frame) -> Frame:
-    print(f"Inside automap_processor(): {automap.shape=}")
-    automap = cv2.resize(automap, None, fx=0.5, fy=0.5, interpolation=cv2.INTER_AREA)
-    automap = automap[10:-10, 2:-2, :]
-    return automap
 
 def create_agent(env, **kwargs) -> PPO:
     """Create a PPO agent with a CNN policy."""
@@ -121,7 +111,7 @@ def solve_env(env_args, n_envs, agent_args, map):
         render=False,
     )
     
-    reward_callback = RewardAverageCallback()
+    # reward_callback = RewardAverageCallback()
     
     checkpoint_callback = CheckpointCallback(
         save_freq=50000,
@@ -131,7 +121,7 @@ def solve_env(env_args, n_envs, agent_args, map):
         save_vecnormalize=False,
     )
     
-    callbacks = [evaluation_callback, reward_callback, checkpoint_callback]
+    callbacks = [evaluation_callback, checkpoint_callback]
     
     agent.learn(
         total_timesteps=10_000_000,
@@ -148,9 +138,9 @@ if __name__ == "__main__":
     env_args = {
         "frame_skip": 4,
         "frame_processor": frame_processor,
-        "automap_processor": automap_processor,
+        "automap_processor": frame_processor,
         "config_path": "config/test.cfg",
-        "n_frames": 32, # stacking frames for CNN input
+        "n_frames": 1, # stacking frames for CNN input (may not be useful)
         "n_actions_history": 32  # track last 32 actions for actor-critic models, doesn't go through CNN
     }
 
