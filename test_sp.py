@@ -1,8 +1,9 @@
 import imageio
 import os
 import numpy as np
-from train_sp import create_vec_env, frame_processor, automap_processor, create_agent
+from train_sp import create_vec_env, frame_processor, create_agent
 from stable_baselines3 import PPO
+from stable_baselines3.common.vec_env import VecTransposeImage
 
 def make_gif(model_path, file_path):
     agent = PPO.load(model_path)
@@ -11,13 +12,15 @@ def make_gif(model_path, file_path):
     env_args = {
         "frame_skip": 4,
         "frame_processor": frame_processor,
-        "automap_processor": automap_processor,
+        "automap_processor": frame_processor,
         "config_path": "config/test.cfg",
-        "n_frames": 4, # stacking frames for CNN input
+        "n_frames": 1, # stacking frames for CNN input
         "n_actions_history": 32  # track last 32 actions for actor-critic models, doesn't go through CNN
     }
     
-    env = create_vec_env(n_envs=1, **env_args)
+    env = create_vec_env(n_envs=1, map="E1M2", **env_args)
+    # Wrap with VecTransposeImage to match the training setup
+    env = VecTransposeImage(env)
     env.seed(0)
     
     print(f"Environment observation space: {env.observation_space}")
@@ -31,7 +34,7 @@ def make_gif(model_path, file_path):
         step_count = 0
         
         while not done:
-            action, _ = agent.predict(obs, deterministic=True)
+            action, _ = agent.predict(obs, deterministic=False)
             print(f"Action: {action}")
             obs, reward, dones, info = env.step(action)
             done = dones[0]
