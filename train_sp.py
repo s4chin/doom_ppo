@@ -146,7 +146,7 @@ if __name__ == "__main__":
 
     doom_map = "E1M2"
     
-    n_envs = 1 # For testing
+    n_envs = 8 # From GameNGen paper
     agent_args = {}
     
     # Add policy_kwargs to specify our CustomCNN as the features extractor
