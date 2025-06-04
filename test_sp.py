@@ -18,7 +18,7 @@ def make_gif(model_path, file_path):
         "n_actions_history": 32  # track last 32 actions for actor-critic models, doesn't go through CNN
     }
     
-    env = create_vec_env(n_envs=1, map="E1M2", **env_args)
+    env = create_vec_env(n_envs=1, map="E1M2", is_eval=True, **env_args)
     # Wrap with VecTransposeImage to match the training setup
     env = VecTransposeImage(env)
     env.seed(0)
