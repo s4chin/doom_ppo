@@ -5,7 +5,7 @@ import vizdoom
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import EvalCallback, CheckpointCallback
 from stable_baselines3.common.monitor import Monitor
-from stable_baselines3.common.vec_env import DummyVecEnv
+from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv
 from stable_baselines3.common.vec_env import VecTransposeImage
 
 from callbacks import RewardAverageCallback
@@ -60,7 +60,7 @@ def create_vec_env(map, n_envs=1, is_eval=False, **kwargs) -> DummyVecEnv:
         env_kwargs["render"] = (i == 0)
         
         env_creators.append(lambda env_kwargs=env_kwargs: create_env(**env_kwargs))
-    return DummyVecEnv(env_creators)
+    return SubprocVecEnv(env_creators)
 
 def frame_processor(frame: Frame) -> Frame:
     # frame.shape is (240, 320, 3) which we resize to (120, 160)

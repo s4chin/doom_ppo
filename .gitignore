@@ -241,3 +241,9 @@ pyrightconfig.json
 .ionide
 
 # End of https://www.toptal.com/developers/gitignore/api/git,python,macos,visualstudiocode
+
+# Custom
+logs/
+wandb/
+*.wad
+*.ini
