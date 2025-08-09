@@ -1,6 +1,7 @@
 import itertools
 import math
 import typing as t
+import random
 
 import cv2
 import gymnasium as gym
@@ -16,12 +17,13 @@ AMMO_VARIABLES = [GameVariable.AMMO0, GameVariable.AMMO1, GameVariable.AMMO2, Ga
 
 # Buttons that cannot be used together
 MUTUALLY_EXCLUSIVE_GROUPS = [
-    [Button.MOVE_RIGHT, Button.MOVE_LEFT, Button.TURN_RIGHT, Button.TURN_LEFT],
+    [Button.MOVE_RIGHT, Button.MOVE_LEFT],
+    [Button.TURN_RIGHT, Button.TURN_LEFT],
     [Button.MOVE_FORWARD, Button.MOVE_BACKWARD],
 ]
 
 # Buttons that can only be used alone.
-EXCLUSIVE_BUTTONS = [Button.ATTACK, Button.USE]
+EXCLUSIVE_BUTTONS = []
 
 
 def has_exclusive_button(actions: np.ndarray, buttons: np.array) -> np.array:
@@ -61,9 +63,12 @@ def get_available_actions(buttons: np.array) -> t.List[t.List[float]]:
 class DoomEnvSP(gym.Env):
     """Wrapper environment following Gymnasium interface for a VizDoom game instance."""
     
-    def __init__(self, game: vizdoom.DoomGame, frame_processor: t.Callable, automap_processor: t.Callable, frame_skip: int = 4, n_frames: int = 4, n_actions_history: int = 32):
+    def __init__(self, game: vizdoom.DoomGame, frame_processor: t.Callable, automap_processor: t.Callable, frame_skip: int = 4, n_frames: int = 4, n_actions_history: int = 32, capture_intermediate_frames: bool = False):
         """Initialize the Doom environment with a game instance, frame processor, and frame skip."""
         super().__init__()
+
+        self.sticky_prob = 0.25
+        self._last_action = -1
         
         self.n_frames = n_frames
         self.n_actions_history = n_actions_history
@@ -76,6 +81,8 @@ class DoomEnvSP(gym.Env):
         self.possible_actions = get_available_actions(game.get_available_buttons())
         self.action_space = spaces.Discrete(len(self.possible_actions))
         self.frame_skip = frame_skip
+        # Should be true only at inference
+        self.capture_intermediate_frames = capture_intermediate_frames
 
         self.frame_processor = frame_processor
         self.automap_processor = automap_processor
@@ -122,15 +129,35 @@ class DoomEnvSP(gym.Env):
         self.prev_killcount = self.game.get_game_variable(GameVariable.KILLCOUNT)
         self.prev_itemcount = self.game.get_game_variable(GameVariable.ITEMCOUNT)
         self.prev_secretcount = self.game.get_game_variable(GameVariable.SECRETCOUNT)
-        self.grid_size = 256 # TODO: TBD
+        self.grid_size = 128 # TODO: TBD
         self.start_x, self.start_y = self.game.get_game_variable(GameVariable.POSITION_X), self.game.get_game_variable(GameVariable.POSITION_Y)
 
         self.visited_cells = {(math.floor(self.start_x / self.grid_size), math.floor(self.start_y / self.grid_size))} # lets see
 
     def step(self, action: int) -> t.Tuple[Frame, float, bool, bool, dict]:
         """Apply an action to the environment and return the resulting state."""
-        reward = self.game.make_action(self.possible_actions[action], self.frame_skip)
-        terminated = self.game.is_episode_finished()
+        if self._last_action != -1 and random.random() < self.sticky_prob:
+            action = self._last_action
+        self._last_action = action
+
+        info: dict = {}
+        if self.capture_intermediate_frames:
+            total_reward = 0.0
+            captured_frames: list[np.ndarray] = []
+            for _ in range(self.frame_skip):
+                step_reward = self.game.make_action(self.possible_actions[action], 1)
+                total_reward += step_reward
+                state = self.game.get_state()
+                if state is not None:
+                    captured_frames.append(state.screen_buffer)
+                if self.game.is_episode_finished():
+                    break
+            reward = float(total_reward)
+            terminated = self.game.is_episode_finished()
+            info["captured_frames"] = captured_frames
+        else:
+            reward = self.game.make_action(self.possible_actions[action], self.frame_skip)
+            terminated = self.game.is_episode_finished()
         truncated = False  # VizDoom handles termination; no truncation needed here
         
         # Update action history
@@ -145,7 +172,7 @@ class DoomEnvSP(gym.Env):
         
         self.state = self._get_stacked_frames()
         reward = self.get_reward(self.state, reward, terminated, truncated, {})
-        return self.state, reward, terminated, truncated, {}
+        return self.state, reward, terminated, truncated, info
 
     def get_reward(self, obs, _, done, truncated, info):
         state = self.game.get_state()

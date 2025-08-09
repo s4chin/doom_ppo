@@ -120,6 +120,10 @@ class CustomCNN(BaseFeaturesExtractor):
         #     save_as_image(observations)
         #     print(f"{observations['action_history']=}")
         # Process screen and automap separately
+
+        assert observations['screen'].shape[1] == 3, f"Unexpected shape for screen: {observations['screen'].shape=}"
+        assert observations['automap'].shape[1] == 3, f"Unexpected shape for automap: {observations['automap'].shape=}"
+
         screen_features = self.screen_cnn(observations['screen'])
         automap_features = self.automap_cnn(observations['automap'])
         action_history_features = self.action_history_embedding(observations['action_history'].long() + 1)
