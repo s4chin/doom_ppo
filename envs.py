@@ -46,7 +46,53 @@ def has_excluded_pair(actions: np.ndarray, buttons: np.array) -> np.array:
 
 
 def get_available_actions(buttons: np.array) -> t.List[t.List[float]]:
-    # Create list of all possible actions of size (2^n_available_buttons x n_available_buttons)
+    """Return a reduced, hand-picked discrete action set.
+
+    We prefer a curated list of common actions (move, turn, strafe, shoot, use),
+    filtered to only include buttons present in the current scenario. If none of
+    the curated actions are applicable, we fall back to the combinatorial
+    enumeration (with mutual exclusivity constraints) used previously.
+    """
+    # Map available buttons to indices for vector construction
+    button_to_index: dict[vizdoom.Button, int] = {btn: i for i, btn in enumerate(buttons)}
+
+    def construct_action_vector(pressed: list[vizdoom.Button]) -> list[float]:
+        vec = [0.0] * len(buttons)
+        for b in pressed:
+            vec[button_to_index[b]] = 1.0
+        return vec
+
+    def all_present(pressed: list[vizdoom.Button]) -> bool:
+        return all(b in button_to_index for b in pressed)
+
+    # Curated actions (no no-op). Adjust this list to taste.
+    curated_actions_raw: list[list[vizdoom.Button]] = [
+        [Button.MOVE_FORWARD],
+        [Button.MOVE_BACKWARD],
+        [Button.MOVE_LEFT],
+        [Button.MOVE_RIGHT],
+        [Button.TURN_LEFT],
+        [Button.TURN_RIGHT],
+        [Button.ATTACK],
+        [Button.MOVE_FORWARD, Button.ATTACK],
+        [Button.TURN_LEFT, Button.ATTACK],
+        [Button.TURN_RIGHT, Button.ATTACK],
+        [Button.MOVE_LEFT, Button.ATTACK],
+        [Button.MOVE_RIGHT, Button.ATTACK],
+        [Button.USE],
+    ]
+
+    curated_vectors: list[list[float]] = [
+        construct_action_vector(combo)
+        for combo in curated_actions_raw
+        if all_present(combo)
+    ]
+
+    if len(curated_vectors) > 0:
+        print('Built curated action space of size {} from buttons {}'.format(len(curated_vectors), buttons))
+        return curated_vectors
+
+    # Fallback: original combinatorial enumeration with constraints
     action_combinations = np.array([list(seq) for seq in itertools.product([0., 1.], repeat=len(buttons))])
 
     # Build action mask from action combinations and exclusion mask
@@ -67,7 +113,7 @@ class DoomEnvSP(gym.Env):
         """Initialize the Doom environment with a game instance, frame processor, and frame skip."""
         super().__init__()
 
-        self.sticky_prob = 0.25
+        self.sticky_prob = 0.05
         self._last_action = -1
         
         self.n_frames = n_frames
@@ -80,6 +126,7 @@ class DoomEnvSP(gym.Env):
         self.game = game
         self.possible_actions = get_available_actions(game.get_available_buttons())
         self.action_space = spaces.Discrete(len(self.possible_actions))
+        self.available_buttons = game.get_available_buttons()
         self.frame_skip = frame_skip
         # Should be true only at inference
         self.capture_intermediate_frames = capture_intermediate_frames
@@ -139,8 +186,9 @@ class DoomEnvSP(gym.Env):
         if self._last_action != -1 and random.random() < self.sticky_prob:
             action = self._last_action
         self._last_action = action
+        print(f"{action=}")
 
-        info: dict = {}
+        info: dict = {"executed_action": action}
         if self.capture_intermediate_frames:
             total_reward = 0.0
             captured_frames: list[np.ndarray] = []
@@ -178,6 +226,12 @@ class DoomEnvSP(gym.Env):
         state = self.game.get_state()
         reward = 0
 
+        # Detect player death independently of state availability (state is None on terminal step)
+        player_dead = self.game.is_player_dead()
+
+        if done and player_dead:
+            reward += -5000
+
         if state:
             curr_health = self.game.get_game_variable(GameVariable.HEALTH)
             curr_armor = self.game.get_game_variable(GameVariable.ARMOR)
@@ -194,9 +248,7 @@ class DoomEnvSP(gym.Env):
             if curr_health < self.prev_health:
                 reward += -100
 
-            # 2. Player death: -5,000 if health is 0 and episode ends
-            if done and curr_health <= 0:
-                reward += -5000
+            # 2. Death penalty handled before this block
             
             # 3. Enemy hit: 300 per hit
             if curr_hitcount > self.prev_hitcount:
@@ -244,6 +296,7 @@ class DoomEnvSP(gym.Env):
             self.prev_itemcount = curr_itemcount
             self.prev_secretcount = curr_secretcount
 
+
         return reward
 
     def reset(self, *, seed: t.Optional[int] = None, options: t.Optional[dict] = None) -> t.Tuple[Frame, dict]:
@@ -252,6 +305,7 @@ class DoomEnvSP(gym.Env):
         self.game.new_episode()
         
         # Reset action history
+        self._last_action = -1
         self.action_history = np.full((self.n_actions_history,), -1, dtype=np.int64)
         
         initial_screen, initial_automap = self._get_frame()
@@ -305,3 +359,64 @@ class DoomEnvSP(gym.Env):
             'automap': np.concatenate(self.automap_stack, axis=2),
             'action_history': self.action_history
         }
+    
+    def get_action_labels(self) -> list[str]:
+        """Generate human-readable labels for each action based on button combinations.
+        
+        Returns:
+            List of action labels, one per discrete action in the action space.
+        """
+        # Map button enum to readable name
+        button_names = {
+            Button.MOVE_FORWARD: "Forward",
+            Button.MOVE_BACKWARD: "Backward",
+            Button.MOVE_LEFT: "Left",
+            Button.MOVE_RIGHT: "Right",
+            Button.TURN_LEFT: "Turn Left",
+            Button.TURN_RIGHT: "Turn Right",
+            Button.ATTACK: "Attack",
+            Button.USE: "Use",
+            Button.SPEED: "Run",
+            Button.STRAFE: "Strafe",
+            Button.CROUCH: "Crouch",
+            Button.JUMP: "Jump",
+            Button.RELOAD: "Reload",
+            Button.ZOOM: "Zoom",
+        }
+        
+        # Define priority order for button display (movement before actions)
+        button_priority = {
+            Button.MOVE_FORWARD: 0,
+            Button.MOVE_BACKWARD: 1,
+            Button.MOVE_LEFT: 2,
+            Button.MOVE_RIGHT: 3,
+            Button.TURN_LEFT: 4,
+            Button.TURN_RIGHT: 5,
+            Button.STRAFE: 6,
+            Button.SPEED: 7,
+            Button.CROUCH: 8,
+            Button.JUMP: 9,
+            Button.ATTACK: 10,
+            Button.USE: 11,
+            Button.RELOAD: 12,
+            Button.ZOOM: 13,
+        }
+        
+        labels = []
+        for action_vector in self.possible_actions:
+            # Find which buttons are pressed in this action
+            pressed_buttons = []
+            for i, val in enumerate(action_vector):
+                if val == 1.0:
+                    button = self.available_buttons[i]
+                    pressed_buttons.append((button, button_names.get(button, str(button))))
+            
+            # Sort by priority to ensure consistent ordering (movement before actions)
+            pressed_buttons.sort(key=lambda x: button_priority.get(x[0], 100))
+            button_labels = [name for _, name in pressed_buttons]
+            
+            # Combine button names with "+"
+            label = "+".join(button_labels) if button_labels else "No-op"
+            labels.append(label)
+        
+        return labels

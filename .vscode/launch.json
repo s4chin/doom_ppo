@@ -1,0 +1,70 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Train: 1 Environment (Debug)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/train_sp.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "args": [
+                "--n-training-envs", "1",
+                "--map", "E1M1",
+                "--config", "config/test.cfg",
+                "--n-frames", "1",
+                "--no-render"
+            ],
+            "env": {
+                "OMP_NUM_THREADS": "1",
+                "MKL_NUM_THREADS": "1",
+                "OPENBLAS_NUM_THREADS": "1",
+                "NUMEXPR_NUM_THREADS": "1"
+            }
+        },
+        {
+            "name": "Train: 8 Environments (Normal)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/train_sp.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "args": [
+                "--n-training-envs", "8",
+                "--map", "E1M1",
+                "--config", "config/test.cfg",
+                "--n-frames", "1",
+                "--no-render"
+            ],
+            "env": {
+                "OMP_NUM_THREADS": "1",
+                "MKL_NUM_THREADS": "1",
+                "OPENBLAS_NUM_THREADS": "1",
+                "NUMEXPR_NUM_THREADS": "1"
+            }
+        },
+        {
+            "name": "Test: Evaluate Model",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/test_sp.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "env": {
+                "OMP_NUM_THREADS": "1",
+                "MKL_NUM_THREADS": "1",
+                "OPENBLAS_NUM_THREADS": "1",
+                "NUMEXPR_NUM_THREADS": "1"
+            }
+        },
+        {
+            "name": "Python: Current File",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            "justMyCode": false
+        }
+    ]
+}
+

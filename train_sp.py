@@ -16,7 +16,7 @@ import gymnasium as gym
 from envs import DoomEnvSP
 from policy import CustomCNN
 from stable_baselines3.common.policies import MultiInputActorCriticPolicy
-from callbacks import RewardAverageCallback, VideoEvalCallback
+from callbacks import RewardAverageCallback, VideoEvalCallback, ActionHistogramCallback
 
 # Type alias for clarity
 Frame: TypeAlias = np.ndarray
@@ -71,11 +71,30 @@ def create_env(
     # Enable automap
     game.set_automap_buffer_enabled(True)
     game.set_automap_mode(vizdoom.AutomapMode.OBJECTS)
-    game.set_automap_rotate(True)
+    game.set_automap_rotate(False)
     game.set_automap_render_textures(True)
 
     game.init()
     return DoomEnvSP(game, n_frames=n_frames, **kwargs)
+
+
+def extract_action_to_buttons_mapping(env: DoomEnvSP) -> list[list[int]]:
+    """Extract the mapping from action indices to button indices.
+    
+    Args:
+        env: A DoomEnvSP environment instance
+        
+    Returns:
+        List where each element is a list of button indices pressed for that action.
+        e.g., [[0], [1], [0, 6]] means action 0 presses button 0, 
+        action 1 presses button 1, action 2 presses buttons 0 and 6.
+    """
+    action_to_buttons = []
+    for action_vector in env.possible_actions:
+        # Find indices where button is pressed (value is 1.0)
+        button_indices = [i for i, val in enumerate(action_vector) if val == 1.0]
+        action_to_buttons.append(button_indices)
+    return action_to_buttons
 
 
 def create_vec_env(
@@ -83,13 +102,14 @@ def create_vec_env(
     n_envs: int = 1,
     is_eval: bool = False,
     log_dir: str = "logs",
+    render: bool = False,
     **kwargs
 ) -> VecEnv:
     """Create a vectorized environment with multiple DoomEnv instances, potentially using different maps."""
     if is_eval:
         eval_kwargs = kwargs.copy()
         eval_kwargs["map_name"] = map_name
-        eval_kwargs["render"] = True  # Always render the eval environment
+        eval_kwargs["render"] = render  # Always render the eval environment
         monitor_path = os.path.join(log_dir, "monitor", "eval")
         os.makedirs(monitor_path, exist_ok=True)
         return DummyVecEnv([lambda: Monitor(create_env(**eval_kwargs), monitor_path)] * n_envs)
@@ -107,7 +127,7 @@ def create_vec_env(
         env_kwargs = kwargs.copy()
         env_kwargs["map_name"] = map_name
         # Only render the first environment for viewing
-        env_kwargs["render"] = (i == 0)
+        env_kwargs["render"] = (i == 0) and render
         env_creators.append(make_env(env_kwargs, i))
     return SubprocVecEnv(env_creators)  # type: ignore[arg-type]
 
@@ -134,7 +154,7 @@ def create_agent(env, tensorboard_log: str = "logs/tensorboard", **kwargs) -> PP
         gamma=0.99,          # From GameNGen paper
         gae_lambda=0.95,     # GAE lambda parameter
         clip_range=0.2,      # PPO clipping parameter
-        ent_coef=0.1,        # From GameNGen paper - higher for more exploration
+        ent_coef=0.01,        # Different from GameNGen paper - paper says 0.1
         vf_coef=0.5,         # Value function coefficient
         max_grad_norm=0.5,   # Gradient clipping for numerical stability
         tensorboard_log=tensorboard_log,
@@ -150,14 +170,19 @@ def solve_env(
     agent_args,
     map_name,
     log_dir: str,
-    ckpt_dir: str
+    ckpt_dir: str,
+    render: bool = False,
 ):
     """Train agent on multiple maps in parallel."""
+    
+    # Frequency for callbacks (eval, checkpoints, videos, histograms)
+    callback_freq = 5000
 
     training_env = create_vec_env(
         map_name=map_name,
         n_envs=n_envs,
         log_dir=log_dir,
+        render=render,
         **env_args
     )
     eval_env = create_vec_env(
@@ -165,6 +190,7 @@ def solve_env(
         n_envs=1,
         is_eval=True,
         log_dir=log_dir,
+        render=render,
         **env_args
     )
 
@@ -206,13 +232,14 @@ def solve_env(
     eval_env = VecTransposeImage(eval_env)
 
     print(f"Training on {map_name} across {n_envs} environments")
-    print("Rendering only the first training environment")
-    print("Rendering the evaluation environment")
+    if render:
+        print("Rendering only the first training environment")
+        print("Rendering the evaluation environment")
 
     evaluation_callback = EvalCallback(
         eval_env,
         n_eval_episodes=3,
-        eval_freq=5000,
+        eval_freq=callback_freq,
         log_path=eval_log_path,
         best_model_save_path=best_model_dir,
         deterministic=False,
@@ -223,7 +250,7 @@ def solve_env(
         eval_env=eval_env,
         gif_dir=os.path.join(log_dir, "figures", "eval"),
         n_eval_episodes=3,
-        eval_freq=5000,
+        eval_freq=callback_freq,
         deterministic=False,
         fps=9,
         verbose=1,
@@ -231,7 +258,7 @@ def solve_env(
     )
 
     checkpoint_callback = CheckpointCallback(
-        save_freq=5000,
+        save_freq=callback_freq,
         save_path=ckpt_dir,
         name_prefix="ppo_doom_model",
         save_replay_buffer=False,
@@ -239,11 +266,27 @@ def solve_env(
     )
 
     avg_reward_callback = RewardAverageCallback(verbose=1)
+    
+    # Get action labels from the environment
+    # Create a temporary environment to extract action labels
+    temp_env = create_env(**env_args)
+    action_labels = temp_env.get_action_labels()
+    temp_env.close()
+    
+    action_histogram_callback = ActionHistogramCallback(
+        plot_dir=os.path.join(log_dir, "figures", "actions"),
+        save_freq=callback_freq,
+        n_actions=len(action_labels),
+        action_labels=action_labels,
+        verbose=1
+    )
+    
     callbacks = [
         evaluation_callback,
         video_callback,
         checkpoint_callback,
-        avg_reward_callback
+        avg_reward_callback,
+        action_histogram_callback,
     ]
 
     agent.learn(
@@ -305,7 +348,17 @@ if __name__ == "__main__":
         action="store_true",
         help="Use Weights and Biases for logging"
     )  # Not implemented yet
+    parser.add_argument(
+        "--no-render",
+        action="store_true",
+        help="Do not render any environment, used for training on headless servers"
+    )
     args = parser.parse_args()
+
+    if args.use_wandb:
+        raise NotImplementedError("Wandb logging is not implemented yet")
+    
+    render = not args.no_render
 
     os.environ.setdefault("OMP_NUM_THREADS", "1")
     os.environ.setdefault("MKL_NUM_THREADS", "1")
@@ -350,5 +403,6 @@ if __name__ == "__main__":
         agent_args=agent_args,
         map_name=doom_map,
         log_dir=log_dir,
-        ckpt_dir=ckpt_dir
+        ckpt_dir=ckpt_dir,
+        render=render,
     )
